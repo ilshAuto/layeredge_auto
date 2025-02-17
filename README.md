@@ -34,18 +34,8 @@
 * 出现问题请先使用deepseek、chatgpt询问
 
 ### js部分
-
+WALLET_SERVER: https://github.com/ilshAuto/wallet_server/releases/tag/wallet_server
 用于生成钱包签名，使用webstorm或者命令行启动
-
-1. 初始化
-   cd js_server
-   npm init -y
-2. 安装依赖
-   npm install express@4.18.2 body-parser@1.20.2 ethers@6.7.1 socks-proxy-agent@8.0.2 dotenv@16.3.1
-3. 启动服务
-   webstorm直接启动即可。
-   命令行：
-   npm run dev
 
 ### python部分
 

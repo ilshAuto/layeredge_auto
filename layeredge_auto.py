@@ -38,7 +38,7 @@ class ScraperReq:
 
 
 class LayerEdge:
-    def __init__(self, index: int, proxy: str, headers: dict, mnemonic: str):
+    def __init__(self, index: int, proxy: str, headers: dict, mnemonic: str, JS_SERVER:str):
         proxies = {
             'http': proxy,
             'https': proxy,
@@ -48,6 +48,9 @@ class LayerEdge:
         self.scrape: Optional[ScraperReq] = ScraperReq(proxies, headers)
         self.address: Optional[str] = None
         self.mnemonic = mnemonic
+        self.epoch_count = 0  # 添加计数器
+        self.max_epochs = 30  # 最大运行次数
+        self.JS_SERVER = JS_SERVER
 
     async def check_proxy(self):
         try:
@@ -60,18 +63,25 @@ class LayerEdge:
 
     async def loop_task(self):
         while True:
-            proxy_flag = await self.check_proxy()
-            if not proxy_flag:
-                logger.info(f'{self.index}, {self.proxy} 代理检测失败，睡眠3h重试')
-                await asyncio.sleep(10800)
-                continue
-            address_flag = await self.get_address()
-            if not address_flag:
-                logger.info(f'{self.index}, {self.proxy} 钱包地址获取失败，睡眠30秒重试')
+            try:
+                proxy_flag = await self.check_proxy()
+                if not proxy_flag:
+                    logger.info(f'{self.index}, {self.proxy} 代理检测失败，睡眠3h重试')
+                    await asyncio.sleep(10800)
+                    continue
+                address_flag = await self.get_address()
+                if not address_flag:
+                    logger.info(f'{self.index}, {self.proxy} 钱包地址获取失败，睡眠30秒重试')
+                    await asyncio.sleep(30)
+                    continue
+
+                await self.start_node()
+                await self.poll_node_info()  # 这里需要处理返回值
+
+            except Exception as e:
+                logger.error(f'{self.index}, {self.proxy} {self.address} 任务循环出错: {e}')
                 await asyncio.sleep(30)
                 continue
-
-            await self.start_node()
 
     async def get_address(self):
         wallet_address_payload = {
@@ -80,7 +90,7 @@ class LayerEdge:
         address = ''
         for i in range(3):
             try:
-                address_res = await httpx.AsyncClient().post('http://127.0.0.1:3666/api/wallet_address',
+                address_res = await httpx.AsyncClient().post(f'http://{JS_SERVER}:3666/api/wallet_address',
                                                              json=wallet_address_payload)
                 address = address_res.json()['data']['address']
                 logger.info(f'{self.index}, {self.proxy}, 获取钱包地址：{address}')
@@ -94,44 +104,49 @@ class LayerEdge:
 
     async def start_node(self):
         try:
-            # 构建签名payload
-            timestamp = int(time.time() * 1000)  # 获取当前时间戳
+            # 先检查节点状态
+            status_url = f'https://referralapi.layeredge.io/api/light-node/node-status/{self.address}'
+            status_res = await self.scrape.get_async(status_url)
+            status_data = status_res.json()['data']
+            if status_data.get('startTimestamp'):
+                logger.info(f'{self.index}, {self.proxy} {self.address} 节点已经在运行中')
+                return True
+
+            # 节点未启动，执行启动流程
+            timestamp = int(time.time() * 1000)
             sign_payload = {
                 'mnemonic': self.mnemonic,
                 'payload': f'Node activation request for {self.address} at {timestamp}',
                 'proxy': self.proxy
             }
-            # print(sign_payload)
-            # 请求签名
+
             try:
-                sign_res = await httpx.AsyncClient().post('http://127.0.0.1:3666/api/sign', json=sign_payload)
+                sign_res = await httpx.AsyncClient().post(f'http://{JS_SERVER}:3666/api/sign', json=sign_payload)
             except Exception as e:
                 logger.error(f'{self.index}, {self.proxy} 签名服务请求失败，{e}')
                 await asyncio.sleep(20)
-                return
-            # if not sign_res:
-            #     logger.error(f'{self.index}, {self.proxy} 签名失败: {sign_res.text}')
-            #     return
-            # print(sign_res.text)
+                return False
+
             signature = sign_res.json()['signature']
             logger.info(f'{self.index}, {self.proxy} {self.address} 签名结果：{signature}')
 
-            # 启动节点
             start_node_payload = {
                 "sign": signature,
                 "timestamp": timestamp
             }
             start_node_url = f'https://referralapi.layeredge.io/api/light-node/node-action/{self.address}/start'
             start_node_res = await self.scrape.post_async(start_node_url, req_json=start_node_payload)
-            # logger.info(f'{self.index}, {self.proxy} {self.address}节点启动成功: {start_node_res.text}')
+
             if 'can not start multiple light node' in start_node_res.text or 'node action executed successfully' in start_node_res.text:
                 logger.info(f'{self.index}, {self.proxy} {self.address} 节点启动成功')
-                # 启动轮询
-                await self.poll_node_info()
+                self.epoch_count = 0  # 重置计数器
+                return True
+            return False
 
         except Exception as e:
             logger.error(f'{self.index}, {self.proxy} {self.address}节点操作失败: {e}')
             await asyncio.sleep(30)
+            return False
 
     async def check_node_status(self):
         """检查节点状态"""
@@ -154,7 +169,6 @@ class LayerEdge:
     async def poll_node_info(self):
         """轮询节点相关接口"""
         while True:
-            epoch = 0
             try:
                 # 检查钱包详情
                 wallet_detail_url = f'https://referralapi.layeredge.io/api/referral/wallet-details/{self.address}'
@@ -177,9 +191,8 @@ class LayerEdge:
                 # 检查节点状态
                 if not await self.check_node_status():
                     logger.debug(f'{self.index}, {self.proxy}, {self.address} 节点未启动，返回')
-                    return
+                    return True  # 返回True表示需要重新启动节点
 
-                # 请求排行榜数据
                 try:
                     # 节点排行榜
                     node_leaderboard_url = 'https://referralapi.layeredge.io/api/light-node/node-leaderboard'
@@ -189,20 +202,24 @@ class LayerEdge:
                     referral_leaderboard_url = 'https://referralapi.layeredge.io/api/referral/leaderboard'
                     await self.scrape.get_async(referral_leaderboard_url, req_param={'offset': 0, 'limit': 100})
 
-
                 except Exception as e:
                     logger.error(f'{self.index}, {self.proxy} {self.address} 请求排行榜数据失败: {e}')
+                    continue  # 排行榜请求失败继续运行
 
                 if not await self.check_node_status():
                     logger.debug(f'{self.index}, {self.proxy}, {self.address} 节点未启动，返回')
-                    return
-                    # 一组请求完成后休眠1分钟
-                logger.success(f'{self.index}, {self.proxy} {self.address} 完成一轮轮询，睡眠60s')
+                    return True  # 返回True表示需要重新启动节点
+
+                # 一组请求完成后休眠1分钟
+                self.epoch_count += 1
+                remaining = self.max_epochs - self.epoch_count
+                logger.success(f'{self.index}, {self.proxy} {self.address} 完成第{self.epoch_count}轮轮询，'
+                               f'还剩{remaining}轮，睡眠60s')
                 await asyncio.sleep(60)
 
-                epoch = epoch + 1
-                if epoch >= 100:
+                if self.epoch_count >= self.max_epochs:
                     await self.stop_node()
+                    return False  # 返回False表示完成所有轮询
 
             except Exception as e:
                 logger.error(f'{self.index}, {self.proxy} {self.address} 轮询节点信息失败: {e}')
@@ -243,7 +260,7 @@ class LayerEdge:
 
             # 请求签名
             try:
-                sign_res = await httpx.AsyncClient().post('http://127.0.0.1:3666/api/sign', json=sign_payload)
+                sign_res = await httpx.AsyncClient().post(f'http://{JS_SERVER}:3666/api/sign', json=sign_payload)
             except Exception as e:
                 logger.error(f'{self.index}, {self.proxy} {self.address} 签到签名请求失败: {e}')
                 return
@@ -278,7 +295,7 @@ class LayerEdge:
         # print(sign_payload)
         # 请求签名
         try:
-            sign_res = await httpx.AsyncClient().post('http://127.0.0.1:3666/api/sign', json=sign_payload)
+            sign_res = await httpx.AsyncClient().post(f'http://{JS_SERVER}:3666/api/sign', json=sign_payload)
         except Exception as e:
             logger.error(f'{self.index}, {self.proxy} 停止节点签名服务请求失败，{e}')
             await asyncio.sleep(20)
@@ -300,7 +317,7 @@ class LayerEdge:
             logger.error(f'{self.index}, {self.proxy} {self.address} 停止节点失败：{e}')
 
 
-async def run(acc: dict):
+async def run(acc: dict, JS_SERVER:str):
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -308,11 +325,11 @@ async def run(acc: dict):
         'origin': 'https://dashboard.layeredge.io',
         'referer': 'https://dashboard.layeredge.io',
     }
-    layer = LayerEdge(acc['index'], acc['proxy'], headers, acc['mnemonic'])
+    layer = LayerEdge(acc['index'], acc['proxy'], headers, acc['mnemonic'], JS_SERVER)
     await layer.loop_task()
 
 
-async def main():
+async def main(JS_SERVER:str):
     accs = []
     with open('./acc', 'r', encoding='utf-8') as file:
         for line in file.readlines():
@@ -325,7 +342,7 @@ async def main():
     tasks = []
     for index, acc in enumerate(accs):
         acc['index'] = index
-        task = run(acc)
+        task = run(acc, JS_SERVER)
         tasks.append(task)
 
     await asyncio.gather(*tasks)
@@ -336,4 +353,10 @@ if __name__ == '__main__':
     logger.info('🌐 ILSH Community: t.me/ilsh_auto')
     logger.info('🐦 X(Twitter): https://x.com/hashlmBrian')
     logger.info('☕ Pay me Coffe：USDT（TRC20）:TAiGnbo2isJYvPmNuJ4t5kAyvZPvAmBLch')
-    asyncio.run(main())
+    JS_SERVER = '127.0.0.1'
+
+    print('----' * 30)
+    print('请验证, JS_SERVER（钱包验证服务）的host是否正确')
+    print('pay attention to whether the host of the js service is correct')
+    print('----' * 30)
+    asyncio.run(main(JS_SERVER))

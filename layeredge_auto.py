@@ -63,12 +63,12 @@ class LayerEdge:
             proxy_flag = await self.check_proxy()
             if not proxy_flag:
                 logger.info(f'{self.index}, {self.proxy} 代理检测失败，睡眠3h重试')
-                time.sleep(10800)
+                await asyncio.sleep(10800)
                 continue
             address_flag = await self.get_address()
             if not address_flag:
                 logger.info(f'{self.index}, {self.proxy} 钱包地址获取失败，睡眠30秒重试')
-                time.sleep(30)
+                await asyncio.sleep(30)
                 continue
 
             await self.start_node()
@@ -88,7 +88,7 @@ class LayerEdge:
                 return True
             except Exception as e:
                 print(e)
-                time.sleep(30)
+                await asyncio.sleep(30)
         if address == '':
             return False
 
@@ -107,7 +107,7 @@ class LayerEdge:
                 sign_res = await httpx.AsyncClient().post('http://127.0.0.1:3666/api/sign', json=sign_payload)
             except Exception as e:
                 logger.error(f'{self.index}, {self.proxy} 签名服务请求失败，{e}')
-                time.sleep(20)
+                await asyncio.sleep(20)
                 return
             # if not sign_res:
             #     logger.error(f'{self.index}, {self.proxy} 签名失败: {sign_res.text}')
@@ -131,7 +131,7 @@ class LayerEdge:
 
         except Exception as e:
             logger.error(f'{self.index}, {self.proxy} {self.address}节点操作失败: {e}')
-            time.sleep(30)
+            await asyncio.sleep(30)
 
     async def check_node_status(self):
         """检查节点状态"""
@@ -279,7 +279,7 @@ class LayerEdge:
             sign_res = await httpx.AsyncClient().post('http://127.0.0.1:3666/api/sign', json=sign_payload)
         except Exception as e:
             logger.error(f'{self.index}, {self.proxy} 停止节点签名服务请求失败，{e}')
-            time.sleep(20)
+            await asyncio.sleep(20)
             return
         pass
         signature = sign_res.json()['signature']

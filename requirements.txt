@@ -1,0 +1,6 @@
+cloudscraper>=1.2.71
+httpx>=0.24.0
+loguru>=0.7.0
+aiofiles>=23.1.0
+aiohttp-socks>=0.8.3
+python-dotenv>=1.0.0 

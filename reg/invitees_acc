@@ -1,0 +1,4 @@
+输入你的账号信息：格式：助记词---socks5代理
+ps：这些账号注册时随机使用已生成的邀请码（invite_codes文件）进行注册
+example：
+faith test apple microsoft sony ...... ----socks5://11.11.12.11:1293

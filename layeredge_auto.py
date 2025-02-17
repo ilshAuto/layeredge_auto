@@ -197,7 +197,9 @@ class LayerEdge:
                     logger.debug(f'{self.index}, {self.proxy}, {self.address} 节点未启动，返回')
                     return
                     # 一组请求完成后休眠1分钟
+                logger.success(f'{self.index}, {self.proxy} {self.address} 完成一轮轮询，睡眠60s')
                 await asyncio.sleep(60)
+
                 epoch = epoch + 1
                 if epoch >= 100:
                     await self.stop_node()
